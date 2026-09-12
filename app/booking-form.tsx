@@ -9,6 +9,7 @@ import { isStoreClosedOnBookingDate } from "@/lib/store-closed-days";
 import { isVoucherValidForBookingDate } from "@/lib/voucher-validity";
 import type {
   RatesData,
+  RatesByMenuItem,
   StoreSettingsData,
   TableItem,
   VoucherItem,
@@ -24,6 +25,7 @@ function formatRp(n: number) {
 
 const MAX_PAYMENT_PROOF_BYTES = 4 * 1024 * 1024;
 const MAX_PAYMENT_PROOF_LABEL = "4MB";
+const EMPTY_RATES: RatesData = { weekday: [], weekend: [] };
 
 function isVoucherAvailableOn(voucher: VoucherItem, bookingDate: string) {
   return isVoucherValidForBookingDate(
@@ -50,7 +52,7 @@ async function getManualBookingResponsePayload(response: Response) {
 
 interface BookingFormProps {
   initialTables: TableItem[];
-  initialRates: RatesData;
+  initialRates: RatesByMenuItem;
   initialStoreSettings?: StoreSettingsData;
 }
 
@@ -107,6 +109,21 @@ export default function BookingForm({
   const paymentProofInputRef = useRef<HTMLInputElement>(null);
 
   const [reservedHours, setReservedHours] = useState<Set<number>>(new Set());
+
+  const tableGroups = useMemo(() => {
+    const groups = new Map<string, { name: string; tables: TableItem[] }>();
+
+    for (const table of initialTables) {
+      const group = groups.get(table.menuItemId) || {
+        name: table.menuItemName,
+        tables: [],
+      };
+      group.tables.push(table);
+      groups.set(table.menuItemId, group);
+    }
+
+    return Array.from(groups, ([id, group]) => ({ id, ...group }));
+  }, [initialTables]);
 
   const resetTimeSelection = () => {
     setStartHour(null);
@@ -434,6 +451,13 @@ export default function BookingForm({
     isRangeAvailable(startHour, endHour);
   const hasTime = hasValidSelectedRange;
   const totalHours = hasTime ? endHour - startHour : 0;
+  const selectedTableItem = initialTables.find(
+    (table) => table.id === selectedTable || table.name === selectedTable,
+  );
+  const selectedRates =
+    (selectedTableItem && initialRates[selectedTableItem.menuItemId]) ||
+    initialRates.fallback ||
+    EMPTY_RATES;
 
   const { rate, subtotal, discount, serviceChargeAmount, taxAmount, total } =
     useMemo(
@@ -441,11 +465,11 @@ export default function BookingForm({
         calculateBookingTotals({
           totalHours,
           dateObj,
-          activeRates: initialRates,
+          activeRates: selectedRates,
           appliedVoucher,
           storeSettings: initialStoreSettings,
         }),
-      [totalHours, dateObj, appliedVoucher, initialRates, initialStoreSettings],
+      [totalHours, dateObj, appliedVoucher, selectedRates, initialStoreSettings],
     );
 
   const formattedDateStr = dateObj
@@ -806,47 +830,54 @@ export default function BookingForm({
                 </span>
               )}
             </label>
-            <div className="table-grid" id="tableGrid">
-              {initialTables.map((t) => {
-                const isDateSelected = date !== "";
-                const isTableUnavailable = !isDateSelected || isStoreClosed;
-                const isActive =
-                  isDateSelected &&
-                  (selectedTable === t.id || selectedTable === t.name);
+            <div className="space-y-4" id="tableGrid">
+              {tableGroups.map((group) => (
+                <section key={group.id} aria-label={`Pilihan ${group.name}`}>
+                  <p className="mb-2 text-sm font-bold text-pine">{group.name}</p>
+                  <div className="table-grid">
+                    {group.tables.map((t) => {
+                      const isDateSelected = date !== "";
+                      const isTableUnavailable = !isDateSelected || isStoreClosed;
+                      const isActive =
+                        isDateSelected &&
+                        (selectedTable === t.id || selectedTable === t.name);
 
-                let btnClass = "table-option";
+                      let btnClass = "table-option";
 
-                if (isTableUnavailable) {
-                  btnClass += " table-option--disabled";
-                } else if (isActive) {
-                  btnClass += " table-option--active";
-                } else {
-                  btnClass += " table-option--idle";
-                }
+                      if (isTableUnavailable) {
+                        btnClass += " table-option--disabled";
+                      } else if (isActive) {
+                        btnClass += " table-option--active";
+                      } else {
+                        btnClass += " table-option--idle";
+                      }
 
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    disabled={isTableUnavailable}
-                    onClick={() => {
-                      setSelectedTable(t.id);
-                      setReservedHours(new Set());
-                      resetTimeSelection();
-                    }}
-                    className={btnClass}
-                    title={
-                      !isDateSelected
-                        ? "Silakan pilih tanggal terlebih dahulu"
-                        : isStoreClosed
-                          ? "Outlet tutup pada tanggal yang dipilih"
-                          : undefined
-                    }
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          disabled={isTableUnavailable}
+                          onClick={() => {
+                            setSelectedTable(t.id);
+                            setReservedHours(new Set());
+                            resetTimeSelection();
+                          }}
+                          className={btnClass}
+                          title={
+                            !isDateSelected
+                              ? "Silakan pilih tanggal terlebih dahulu"
+                              : isStoreClosed
+                                ? "Outlet tutup pada tanggal yang dipilih"
+                                : undefined
+                          }
+                        >
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
           </div>
 

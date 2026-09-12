@@ -9,11 +9,15 @@ export interface RatesData {
   weekend: RateItem[];
 }
 
+export type RatesByMenuItem = Record<string, RatesData>;
+
 export interface TableItem {
   id: number | string;
   label: string;
   name: string;
   outletId?: string;
+  menuItemId: string;
+  menuItemName: string;
 }
 
 export interface VoucherItem {

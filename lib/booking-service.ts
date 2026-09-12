@@ -2,10 +2,12 @@
 import { createClient } from "@/utils/supabase/server";
 import type {
   RatesData,
+  RatesByMenuItem,
   StoreSettingsData,
   TableItem,
   VoucherItem,
 } from "@/lib/booking-types";
+import { createAdminClient } from "@/utils/supabase/admin";
 import {
   DEFAULT_PAYMENT_GATEWAY_ENABLED,
   getPaymentGatewayEnabled,
@@ -70,31 +72,48 @@ function resolveBusinessHours(row: Record<string, unknown> | null | undefined) {
 
   return {
     openingHour,
-    closingHour: closingHour >= openingHour ? closingHour : DEFAULT_CLOSING_HOUR,
+    closingHour:
+      closingHour >= openingHour ? closingHour : DEFAULT_CLOSING_HOUR,
   };
 }
 
 export async function getTables(): Promise<TableItem[]> {
   try {
-    const supabase = await createClient();
-    // ponytail: fetch active assets from 'assets' table instead of 'tables'
+    // Menu items are not publicly readable, so resolve the relation on the server.
+    const supabase = createAdminClient();
     const { data: dbAssets } = await supabase
       .from("assets")
-      .select("id, asset_name, status, outlet_id")
+      .select("id, asset_name, status, outlet_id, menu_items(id, name)")
       .neq("status", "maintenance")
       .order("asset_name", { ascending: true });
 
     if (dbAssets && dbAssets.length > 0) {
       return dbAssets.map(
-        (a: { id: number | string; asset_name?: string; outlet_id?: string }) => {
-          const rawName = a.asset_name ? a.asset_name.toString() : `Asset ${a.id}`;
+        (a: {
+          id: number | string;
+          asset_name?: string;
+          outlet_id?: string;
+          menu_items?:
+            | { id?: string; name?: string | null }
+            | { id?: string; name?: string | null }[]
+            | null;
+        }) => {
+          const rawName = a.asset_name
+            ? a.asset_name.toString()
+            : `Asset ${a.id}`;
+          const menuItem = Array.isArray(a.menu_items)
+            ? a.menu_items[0]
+            : a.menu_items;
+          const menuItemId = menuItem?.id || "unassigned";
           return {
             id: a.id,
             label: rawName,
             name: rawName,
             outletId: a.outlet_id,
+            menuItemId,
+            menuItemName: menuItem?.name || "Unit lainnya",
           };
-        }
+        },
       );
     }
   } catch {
@@ -105,24 +124,26 @@ export async function getTables(): Promise<TableItem[]> {
     id: n,
     label: `Meja ${n}`,
     name: `Meja ${n}`,
+    menuItemId: "fallback",
+    menuItemName: "Meja",
   }));
 }
 
-export async function getRates(): Promise<RatesData> {
+export async function getRates(): Promise<RatesByMenuItem> {
   try {
     const supabase = await createClient();
     const { data: rulesData } = await supabase
       .from("rental_pricing_rules")
       .select(
-        "id, day_type, rental_pricing_tiers (id, from_hour, to_hour, price_per_hour, tier_order)"
+        "id, menu_item_id, day_type, rental_pricing_tiers (id, from_hour, to_hour, price_per_hour, tier_order)",
       );
 
     if (rulesData && rulesData.length > 0) {
-      const weekday: { minHour: number; maxHour: number; rate: number }[] = [];
-      const weekend: { minHour: number; maxHour: number; rate: number }[] = [];
+      const ratesByMenuItem: RatesByMenuItem = {};
 
       rulesData.forEach(
         (rule: {
+          menu_item_id?: string | null;
           day_type: string;
           rental_pricing_tiers?: Array<{
             from_hour?: number | null;
@@ -131,6 +152,12 @@ export async function getRates(): Promise<RatesData> {
             tier_order?: number;
           }>;
         }) => {
+          if (!rule.menu_item_id) return;
+
+          const rates = (ratesByMenuItem[rule.menu_item_id] ||= {
+            weekday: [],
+            weekend: [],
+          });
           const tiersList = rule.rental_pricing_tiers || [];
           tiersList.forEach((t) => {
             const item = {
@@ -139,32 +166,32 @@ export async function getRates(): Promise<RatesData> {
               rate: Number(t.price_per_hour),
             };
             if (rule.day_type === "weekend") {
-              weekend.push(item);
+              rates.weekend.push(item);
             } else {
-              weekday.push(item);
+              rates.weekday.push(item);
             }
           });
-        }
+        },
       );
 
-      if (weekday.length > 0 || weekend.length > 0) {
-        return {
-          weekday:
-            weekday.length > 0
-              ? weekday.sort((a, b) => a.minHour - b.minHour)
-              : DEFAULT_RATES.weekday,
-          weekend:
-            weekend.length > 0
-              ? weekend.sort((a, b) => a.minHour - b.minHour)
-              : DEFAULT_RATES.weekend,
-        };
+      if (Object.keys(ratesByMenuItem).length > 0) {
+        for (const rates of Object.values(ratesByMenuItem)) {
+          rates.weekday = rates.weekday.length
+            ? rates.weekday.sort((a, b) => a.minHour - b.minHour)
+            : DEFAULT_RATES.weekday;
+          rates.weekend = rates.weekend.length
+            ? rates.weekend.sort((a, b) => a.minHour - b.minHour)
+            : DEFAULT_RATES.weekend;
+        }
+
+        return ratesByMenuItem;
       }
     }
   } catch {
     // Fallback to DEFAULT_RATES
   }
 
-  return DEFAULT_RATES;
+  return { fallback: DEFAULT_RATES };
 }
 
 export async function getVouchers(): Promise<Record<string, VoucherItem>> {
