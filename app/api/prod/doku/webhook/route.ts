@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server";
+import {
+  isDokuBookingInvoice,
+  processDokuBookingNotification,
+} from "@/lib/doku-booking";
 
 import { verifyDokuProductionSignature } from "@/lib/doku";
 import { updateDokuProductionTransactionFromWebhook } from "@/lib/doku-production-transactions";
@@ -37,14 +41,22 @@ export async function POST(request: Request) {
       signature,
     })
   ) {
-    return NextResponse.json({ error: "Invalid DOKU signature." }, { status: 401 });
+    return NextResponse.json(
+      { error: "Invalid DOKU signature." },
+      { status: 401 },
+    );
   }
 
   let notification: DokuNotification;
   try {
     notification = JSON.parse(body) as DokuNotification;
+    if (!notification || typeof notification !== "object")
+      throw new Error("Invalid payload");
   } catch {
-    return NextResponse.json({ error: "Invalid JSON payload." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid JSON payload." },
+      { status: 400 },
+    );
   }
 
   const invoiceNumber = notification.order?.invoice_number;
@@ -61,12 +73,32 @@ export async function POST(request: Request) {
     );
   }
 
+  // Support accounts whose dashboard notification URL still points at this route.
+  // Its signature has already been verified using the original request path.
+  if (isDokuBookingInvoice(invoiceNumber)) {
+    try {
+      const result = await processDokuBookingNotification(notification);
+      return NextResponse.json(result.body, { status: result.status });
+    } catch {
+      return NextResponse.json(
+        { error: "Unable to persist booking payment." },
+        { status: 503 },
+      );
+    }
+  }
+
   const event = {
     invoiceNumber,
     amount,
     status,
-    channel: typeof notification.channel?.id === "string" ? notification.channel.id : null,
-    paidAt: typeof notification.transaction?.date === "string" ? notification.transaction.date : null,
+    channel:
+      typeof notification.channel?.id === "string"
+        ? notification.channel.id
+        : null,
+    paidAt:
+      typeof notification.transaction?.date === "string"
+        ? notification.transaction.date
+        : null,
     dokuRequestId: requestId,
   };
   try {

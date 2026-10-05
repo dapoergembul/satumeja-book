@@ -22,7 +22,8 @@ function mapMidtransStatus(body: MidtransWebhookBody) {
 
   if (
     transactionStatus === "settlement" ||
-    (transactionStatus === "capture" && (!fraudStatus || fraudStatus === "accept"))
+    (transactionStatus === "capture" &&
+      (!fraudStatus || fraudStatus === "accept"))
   ) {
     return "reserved";
   }
@@ -48,15 +49,31 @@ export async function POST(request: Request) {
 
     if (
       !body.order_id ||
+      !/^booking-[a-f0-9]{24}$/.test(body.order_id) ||
       !body.status_code ||
       !body.gross_amount ||
       !body.signature_key
     ) {
-      return NextResponse.json({ error: "Invalid webhook payload." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid webhook payload." },
+        { status: 400 },
+      );
     }
 
-    if (!verifyMidtransSignature(body as Required<Pick<MidtransWebhookBody, "order_id" | "status_code" | "gross_amount" | "signature_key">>)) {
-      return NextResponse.json({ error: "Invalid signature." }, { status: 401 });
+    if (
+      !verifyMidtransSignature(
+        body as Required<
+          Pick<
+            MidtransWebhookBody,
+            "order_id" | "status_code" | "gross_amount" | "signature_key"
+          >
+        >,
+      )
+    ) {
+      return NextResponse.json(
+        { error: "Invalid signature." },
+        { status: 401 },
+      );
     }
 
     const nextStatus = mapMidtransStatus(body);

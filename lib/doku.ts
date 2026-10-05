@@ -7,7 +7,9 @@ const DOKU_CHECKOUT_PATH = "/checkout/v1/payment";
 type DokuCheckoutInput = {
   amount: number;
   customerName: string;
-  customerEmail: string;
+  customerEmail?: string;
+  invoiceNumber?: string;
+  paymentDueMinutes?: number;
   customerPhone?: string;
   callbackUrl?: string;
   notificationUrl?: string;
@@ -147,8 +149,8 @@ async function createDokuCheckout(
 ) {
   const { clientId, secretKey } = getDokuCredentials(environment);
   const invoicePrefix = environment === "production" ? "DOKUPROD" : "DOKUDEV";
-  const invoiceNumber = `${invoicePrefix}${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
-  const phone = input.customerPhone?.replace(/\D/g, "");
+  const invoiceNumber = input.invoiceNumber ?? `${invoicePrefix}${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+  const phone = input.customerPhone?.replace(/\D/g, "").replace(/^0/, "62");
   const callbackUrl = input.callbackUrl
     ? createCallbackUrl(input.callbackUrl, invoiceNumber, input.amount)
     : undefined;
@@ -166,6 +168,7 @@ async function createDokuCheckout(
       invoice_number: invoiceNumber,
       currency: "IDR",
       auto_redirect: true,
+      ...(input.invoiceNumber ? { recover_abandoned_cart: false } : {}),
       ...(callbackUrl
         ? {
             callback_url: callbackUrl,
@@ -189,7 +192,7 @@ async function createDokuCheckout(
       ],
     },
     payment: {
-      payment_due_date: 15,
+      payment_due_date: input.paymentDueMinutes ?? 15,
     },
     ...(input.notificationUrl
       ? {
@@ -200,7 +203,7 @@ async function createDokuCheckout(
       : {}),
     customer: {
       name: input.customerName,
-      email: input.customerEmail,
+      ...(input.customerEmail ? { email: input.customerEmail } : {}),
       ...(phone ? { phone } : {}),
     },
   };
@@ -230,6 +233,7 @@ async function createDokuCheckout(
       Signature: signature,
     },
     body,
+    signal: AbortSignal.timeout(15_000),
   });
   const rawResponse = await response.text();
   const result = (() => {

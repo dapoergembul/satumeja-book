@@ -272,7 +272,7 @@ function renderToggle(
             fontWeight: 700,
           }}
         >
-          {paymentGatewayEnabled ? "Midtrans Active" : "Manual Proof"}
+          {paymentGatewayEnabled ? "DOKU Active" : "Manual Proof"}
         </div>
         <div
           style={{
@@ -465,8 +465,8 @@ export default function AdminPageClient({
       setPaymentGatewayEnabled(payload.paymentGatewayEnabled);
       setMessage(
         payload.paymentGatewayEnabled
-          ? "Midtrans diaktifkan kembali."
-          : "Midtrans dimatikan. Form booking sekarang mewajibkan upload bukti transfer.",
+          ? "DOKU diaktifkan kembali."
+          : "DOKU dimatikan. Form booking sekarang mewajibkan upload bukti transfer.",
       );
       router.refresh();
     } catch (err) {
@@ -533,7 +533,7 @@ export default function AdminPageClient({
               color: "#5c6b60",
             }}
           >
-            Login untuk mengatur apakah booking memakai Midtrans atau upload
+            Login untuk mengatur apakah booking memakai DOKU atau upload
             bukti transfer manual.
           </p>
 
@@ -651,7 +651,7 @@ export default function AdminPageClient({
               color: "#5c6b60",
             }}
           >
-            Saat aktif, customer bayar lewat Midtrans. Saat nonaktif, customer
+            Saat aktif, customer bayar lewat DOKU. Saat nonaktif, customer
             wajib upload bukti transfer dan booking langsung masuk ke status
             reservasi.
           </p>
@@ -674,7 +674,7 @@ export default function AdminPageClient({
             }}
           >
             {paymentGatewayEnabled
-              ? "Status: Midtrans aktif"
+              ? "Status: DOKU aktif"
               : "Status: Upload bukti transfer"}
           </div>
         </div>

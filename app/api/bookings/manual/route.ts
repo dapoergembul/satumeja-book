@@ -89,7 +89,7 @@ export async function POST(request: Request) {
 
     if (quote.paymentGatewayEnabled) {
       return jsonError(
-        "Payment gateway sedang aktif. Gunakan pembayaran Midtrans.",
+        "Payment gateway sedang aktif. Gunakan pembayaran DOKU.",
         409,
       );
     }

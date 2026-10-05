@@ -71,12 +71,11 @@ export default function BookingForm({
     return list;
   }, [openingHour, closingHour]);
 
-  const [isSnapReady, setIsSnapReady] = useState(
-    () => typeof window !== "undefined" && !!window.snap,
-  );
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const submissionInFlight = useRef(false);
   const [date, setDate] = useState("");
   const [minDate, setMinDate] = useState(() => getTodayWib());
   const [selectedTable, setSelectedTable] = useState<number | string | null>(
@@ -133,6 +132,7 @@ export default function BookingForm({
   const resetBookingForm = () => {
     setName("");
     setPhone("");
+    setEmail("");
     setDate("");
     setSelectedTable(null);
     resetTimeSelection();
@@ -160,43 +160,6 @@ export default function BookingForm({
     const intervalId = window.setInterval(syncCurrentTime, 30_000);
 
     return () => window.clearInterval(intervalId);
-  }, []);
-
-  useEffect(() => {
-    const snapUrl = process.env.NEXT_PUBLIC_MIDTRANS_SNAP_URL;
-    const clientKey = process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY;
-
-    if (!snapUrl || !clientKey) {
-      return;
-    }
-
-    const existingScript = document.querySelector<HTMLScriptElement>(
-      'script[data-midtrans-snap="true"]',
-    );
-
-    if (existingScript) {
-      if (!window.snap) {
-        existingScript.addEventListener("load", () => setIsSnapReady(true), {
-          once: true,
-        });
-      }
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = snapUrl;
-    script.dataset.clientKey = clientKey;
-    script.dataset.midtransSnap = "true";
-    script.async = true;
-    script.onload = () => setIsSnapReady(true);
-    script.onerror = () =>
-      setBookingError("Gagal memuat Midtrans Snap. Silakan refresh halaman.");
-    document.body.appendChild(script);
-
-    return () => {
-      script.onload = null;
-      script.onerror = null;
-    };
   }, []);
 
   // Fetch reserved time slots asynchronously from Supabase when selectedTable or date changes
@@ -469,7 +432,13 @@ export default function BookingForm({
           appliedVoucher,
           storeSettings: initialStoreSettings,
         }),
-      [totalHours, dateObj, appliedVoucher, selectedRates, initialStoreSettings],
+      [
+        totalHours,
+        dateObj,
+        appliedVoucher,
+        selectedRates,
+        initialStoreSettings,
+      ],
     );
 
   const formattedDateStr = dateObj
@@ -494,42 +463,13 @@ export default function BookingForm({
     selectedTable !== null &&
     hasTime &&
     consent &&
+    (initialStoreSettings?.paymentGatewayEnabled === false ||
+      /^\S+@\S+\.\S+$/.test(email.trim())) &&
     (initialStoreSettings?.paymentGatewayEnabled !== false || !!paymentProof);
-
-  const pollBookingStatus = async (orderId: string) => {
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      const response = await fetch(
-        `/api/payment/verify-status?orderId=${encodeURIComponent(orderId)}`,
-        {
-          cache: "no-store",
-        },
-      );
-
-      if (response.ok) {
-        const payload = (await response.json()) as {
-          status?: string;
-        };
-
-        if (payload.status === "reserved") {
-          return "reserved";
-        }
-
-        if (
-          payload.status &&
-          ["payment_failed", "expired", "cancelled"].includes(payload.status)
-        ) {
-          return payload.status;
-        }
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, 2000));
-    }
-
-    return "pending_payment";
-  };
 
   const handleSubmit = async () => {
     if (
+      submissionInFlight.current ||
       !isFormValid ||
       selectedTable === null ||
       startHour === null ||
@@ -547,11 +487,13 @@ export default function BookingForm({
         ? selectedTable
         : `Meja ${selectedTable}`;
 
+    submissionInFlight.current = true;
     setIsSubmitting(true);
     setBookingError(null);
     setBookingSuccess(null);
     setBookingPending(null);
 
+    let leavingForPayment = false;
     try {
       if (initialStoreSettings?.paymentGatewayEnabled === false) {
         if (!paymentProof) {
@@ -608,10 +550,6 @@ export default function BookingForm({
         );
         resetBookingForm();
       } else {
-        if (!window.snap || !isSnapReady) {
-          throw new Error("Midtrans Snap belum siap. Silakan coba lagi.");
-        }
-
         const response = await fetch("/api/payment/create-transaction", {
           method: "POST",
           headers: {
@@ -620,6 +558,7 @@ export default function BookingForm({
           body: JSON.stringify({
             name: name.trim(),
             phone: phone.trim(),
+            email: email.trim(),
             assetId: String(selectedItem?.id || ""),
             date,
             startHour,
@@ -630,68 +569,44 @@ export default function BookingForm({
 
         const payload = (await response.json()) as {
           error?: string;
-          snapToken?: string;
+          checkoutUrl?: string;
+          statusUrl?: string;
           orderId?: string;
-          paymentExpiresAt?: string | null;
         };
 
-        if (!response.ok || !payload.snapToken || !payload.orderId) {
+        if (
+          !response.ok ||
+          !payload.orderId ||
+          (!payload.checkoutUrl && !payload.statusUrl)
+        ) {
           throw new Error(
             payload.error || "Gagal membuat transaksi pembayaran.",
           );
         }
 
-        const pendingText = payload.paymentExpiresAt
-          ? `Menunggu pembayaran sampai ${new Date(
-              payload.paymentExpiresAt,
-            ).toLocaleString("id-ID", {
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })} WIB.`
-          : "Menunggu pembayaran Anda di Midtrans.";
-
-        setBookingPending(pendingText);
-
-        window.snap.pay(payload.snapToken, {
-          onSuccess: async () => {
-            const finalStatus = await pollBookingStatus(payload.orderId!);
-
-            if (finalStatus === "reserved") {
-              const detail = `${name.trim()}, ${tableName} · ${formattedDateStr} · ${formattedTimeStr} · Total ${formatRp(
-                total,
-              )}`;
-              setBookingPending(null);
-              setBookingSuccess(detail);
-              resetBookingForm();
-              return;
-            }
-
-            setBookingPending(
-              "Pembayaran diterima, tetapi konfirmasi booking masih menunggu sinkronisasi webhook.",
+        if (payload.checkoutUrl) {
+          try {
+            sessionStorage.setItem(
+              `doku-checkout:${payload.orderId}`,
+              payload.checkoutUrl,
             );
-          },
-          onPending: () => {
-            setBookingPending(pendingText);
-          },
-          onError: () => {
-            setBookingPending(null);
-            setBookingError("Pembayaran gagal diproses. Silakan coba lagi.");
-          },
-          onClose: () => {
-            setBookingPending(
-              "Pembayaran belum selesai. Anda bisa melanjutkan pembayaran dari sesi Midtrans yang sama selama belum kedaluwarsa.",
-            );
-          },
-        });
+          } catch {
+            /* Payment still works when browser storage is unavailable. */
+          }
+        }
+        setBookingPending("Mengarahkan ke halaman pembayaran…");
+        window.location.assign(payload.checkoutUrl || payload.statusUrl!);
+        leavingForPayment = true;
+        return;
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Terjadi kesalahan.";
       setBookingError(msg);
     } finally {
-      setIsSubmitting(false);
+      if (!leavingForPayment) {
+        submissionInFlight.current = false;
+        setIsSubmitting(false);
+      }
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   };
@@ -775,6 +690,24 @@ export default function BookingForm({
             </div>
           </div>
 
+          {initialStoreSettings?.paymentGatewayEnabled !== false && (
+            <div className="form-field">
+              <label htmlFor="email" className="form-label">
+                Email pembayaran
+              </label>
+              <input
+                type="email"
+                id="email"
+                autoComplete="email"
+                maxLength={128}
+                placeholder="nama@email.com"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="form-control"
+              />
+            </div>
+          )}
+
           <div className="form-divider" />
           <div className="form-section-heading">
             <span className="form-step">2</span>
@@ -833,11 +766,14 @@ export default function BookingForm({
             <div className="space-y-4" id="tableGrid">
               {tableGroups.map((group) => (
                 <section key={group.id} aria-label={`Pilihan ${group.name}`}>
-                  <p className="mb-2 text-sm font-bold text-pine">{group.name}</p>
+                  <p className="mb-2 text-sm font-bold text-pine">
+                    {group.name}
+                  </p>
                   <div className="table-grid">
                     {group.tables.map((t) => {
                       const isDateSelected = date !== "";
-                      const isTableUnavailable = !isDateSelected || isStoreClosed;
+                      const isTableUnavailable =
+                        !isDateSelected || isStoreClosed;
                       const isActive =
                         isDateSelected &&
                         (selectedTable === t.id || selectedTable === t.name);
